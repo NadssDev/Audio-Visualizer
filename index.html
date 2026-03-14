@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <title>Real Audio Visualizer - Pitch Shift</title>
+    <style>
+        body { margin: 0; background: #0a0a0a; color: white; font-family: 'Segoe UI', sans-serif; display: flex; height: 100vh; overflow: hidden; }
+        #left { flex: 1; display: flex; align-items: center; justify-content: center; background: #000; position: relative; }
+        canvas { width: 100%; height: 100%; }
+        #right { width: 380px; padding: 30px; background: #111; border-left: 1px solid #333; display: flex; flex-direction: column; gap: 20px; box-shadow: -5px 0 20px rgba(0,0,0,0.5); }
+        h2 { color: white; margin-top: 0; text-transform: uppercase; letter-spacing: 2px; }
+        .upload-area { border: 2px dashed #444; padding: 20px; text-align: center; border-radius: 10px; cursor: pointer; transition: 0.3s; }
+        .upload-area:hover { border-color: #666; background: #1a1a1a; }
+        button { padding: 12px; cursor: pointer; border: none; border-radius: 5px; font-weight: bold; background: #333; color: white; transition: 0.2s; }
+        button:hover { background: #444; }
+        .btn-active { background: #555; color: white !important; }
+        .control-group { display: flex; flex-direction: column; gap: 10px; font-size: 14px; color: #aaa; }
+        input[type="range"] { width: 100%; accent-color: #555; cursor: pointer; }
+        #color-picker { width: 100%; height: 40px; border: none; background: none; cursor: pointer; }
+        #file-name { font-size: 12px; color: #666; word-break: break-all; margin-top: 5px; }
+    </style>
+</head>
+<body>
+
+    <div id="left">
+        <canvas id="canvas"></canvas>
+    </div>
+
+    <div id="right">
+        <h2>Audio Analyzer</h2>
+        
+        <div class="upload-area" onclick="document.getElementById('audio-file').click()">
+            <span>Kliknij, aby dodać plik MP3 / OGG</span>
+            <input type="file" id="audio-file" accept="audio/*" style="display:none">
+            <div id="file-name">Nie wybrano pliku</div>
+        </div>
+
+        <button id="play-btn" onclick="togglePlay()">PLAY</button>
+
+        <div class="control-group">
+            <label>Timeline (Postęp):</label>
+            <input type="range" id="seek-bar" value="0" min="0" step="0.1">
+        </div>
+
+        <div class="control-group">
+            <label>Pitch (Wysokość): <span id="pVal">0</span> centów</label>
+            <input type="range" id="pitch-bar" min="-1200" max="1200" step="10" value="0">
+        </div>
+
+        <div class="control-group">
+            <label>Kolor Visualizera:</label>
+            <input type="color" id="color-picker" value="#00f2ff">
+        </div>
+
+        <div class="control-group">
+            <label>Tryb Visualizera:</label>
+            <button onclick="nextMode()">ZMIEŃ TRYB</button>
+            <span id="mode-name" style="text-align:center; color: #666;">Obecny: Słupki</span>
+        </div>
+    </div>
+
+    <script>
+        const fileInput = document.getElementById('audio-file');
+        const playBtn = document.getElementById('play-btn');
+        const pitchBar = document.getElementById('pitch-bar');
+        const seekBar = document.getElementById('seek-bar');
+        const colorPicker = document.getElementById('color-picker');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+
+        let audioCtx, source, analyzer, dataArray, bufferLength;
+        // Używamy AudioBufferSourceNode zamiast zwykłego HTMLMediaElement dla pełnej kontroli Pitch
+        let audioBuffer;
+        let isLoaded = false;
+        let isPlaying = false;
+        let startTime = 0;
+        let startedAt = 0;
+        let vizColor = colorPicker.value;
+        let mode = 0;
+
+        colorPicker.oninput = (e) => { vizColor = e.target.value; };
+
+        function nextMode() {
+            mode = (mode + 1) % 3;
+            const modes = ["Słupki", "Okrąg", "Linia"];
+            document.getElementById('mode-name').innerText = "Obecny: " + modes[mode];
+        }
+
+        fileInput.onchange = async function() {
+            if (this.files.length > 0) {
+                const file = this.files[0];
+                document.getElementById('file-name').innerText = file.name;
+                
+                if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                
+                const arrayBuffer = await file.arrayBuffer();
+                audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+                
+                isLoaded = true;
+                isPlaying = false;
+                startTime = 0;
+                seekBar.max = audioBuffer.duration;
+                playBtn.innerText = "PLAY";
+                
+                setupAnalyzer();
+                draw();
+            }
+        };
+
+        function setupAnalyzer() {
+            if (!analyzer) {
+                analyzer = audioCtx.createAnalyser();
+                analyzer.fftSize = 512;
+                bufferLength = analyzer.frequencyBinCount;
+                dataArray = new Uint8Array(bufferLength);
+            }
+        }
+
+        function togglePlay() {
+            if (!isLoaded) return;
+            if (isPlaying) {
+                pauseAudio();
+            } else {
+                playAudio();
+            }
+        }
+
+        function playAudio() {
+            source = audioCtx.createBufferSource();
+            source.buffer = audioBuffer;
+            
+            // Połączenie węzłów
+            source.connect(analyzer);
+            analyzer.connect(audioCtx.destination);
+            
+            // Ustawienie Pitch (Detune)
+            source.detune.value = pitchBar.value;
+            
+            const offset = startTime;
+            source.start(0, offset);
+            startedAt = audioCtx.currentTime - offset;
+            
+            isPlaying = true;
+            playBtn.innerText = "PAUSE";
+            playBtn.classList.add('btn-active');
+            
+            updateTimeline();
+        }
+
+        function pauseAudio() {
+            if (source) {
+                source.stop();
+                startTime = audioCtx.currentTime - startedAt;
+            }
+            isPlaying = false;
+            playBtn.innerText = "PLAY";
+            playBtn.classList.remove('btn-active');
+        }
+
+        function updateTimeline() {
+            if (!isPlaying) return;
+            const current = audioCtx.currentTime - startedAt;
+            if (current >= audioBuffer.duration) {
+                isPlaying = false;
+                playBtn.innerText = "PLAY";
+                startTime = 0;
+                return;
+            }
+            seekBar.value = current;
+            requestAnimationFrame(updateTimeline);
+        }
+
+        pitchBar.oninput = (e) => {
+            const val = e.target.value;
+            document.getElementById('pVal').innerText = val;
+            if (source && isPlaying) {
+                // Zmiana wysokości w czasie rzeczywistym bez zmiany prędkości!
+                source.detune.setValueAtTime(val, audioCtx.currentTime);
+            }
+        };
+
+        seekBar.oninput = (e) => {
+            const wasPlaying = isPlaying;
+            if (wasPlaying) pauseAudio();
+            startTime = parseFloat(e.target.value);
+            if (wasPlaying) playAudio();
+        };
+
+        function draw() {
+            requestAnimationFrame(draw);
+            canvas.width = canvas.clientWidth;
+            canvas.height = canvas.clientHeight;
+            if (isLoaded && isPlaying) analyzer.getByteFrequencyData(dataArray);
+            else if (isLoaded && !isPlaying) dataArray.fill(0);
+
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.strokeStyle = vizColor;
+            ctx.fillStyle = vizColor;
+            ctx.lineWidth = 2;
+
+            // Logika rysowania trybów (pozostaje bez zmian dla spójności)
+            if (mode === 0) {
+                const barWidth = (canvas.width / bufferLength) * 2;
+                let x = 0;
+                for (let i = 0; i < bufferLength; i++) {
+                    const barHeight = (dataArray[i] / 255) * (canvas.height * 0.7);
+                    ctx.globalAlpha = 0.7;
+                    ctx.fillRect(x, (canvas.height / 2) - (barHeight / 2), barWidth - 1, barHeight);
+                    x += barWidth;
+                }
+            } else if (mode === 1) {
+                const centerX = canvas.width / 2;
+                const centerY = canvas.height / 2;
+                const radius = 100;
+                for (let i = 0; i < bufferLength; i++) {
+                    const barHeight = (dataArray[i] / 255) * 150;
+                    const angle = (i / bufferLength) * Math.PI * 2;
+                    const xStart = centerX + Math.cos(angle) * radius;
+                    const yStart = centerY + Math.sin(angle) * radius;
+                    const xEnd = centerX + Math.cos(angle) * (radius + barHeight);
+                    const yEnd = centerY + Math.sin(angle) * (radius + barHeight);
+                    ctx.beginPath(); ctx.moveTo(xStart, yStart); ctx.lineTo(xEnd, yEnd); ctx.stroke();
+                }
+            } else if (mode === 2) {
+                ctx.beginPath();
+                let sliceWidth = canvas.width / bufferLength;
+                let x = 0;
+                for (let i = 0; i < bufferLength; i++) {
+                    let v = dataArray[i] / 128.0;
+                    let y = (v * canvas.height / 4) + (canvas.height / 2.5);
+                    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+                    x += sliceWidth;
+                }
+                ctx.stroke();
+            }
+            ctx.globalAlpha = 1.0;
+        }
+    </script>
+</body>
+</html>
